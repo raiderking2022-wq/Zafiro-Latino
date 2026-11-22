@@ -1,0 +1,8 @@
+{
+  "name": "zafiro-addon",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Addon Zafiro (CineHDPlus) para Nuvio/Stremio, desplegable en Vercel.",
+  "scripts": { "start": "node addon/server.js" },
+  "engines": { "node": "22.x" }
+}

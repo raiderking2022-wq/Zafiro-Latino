@@ -1,0 +1,130 @@
+name: Build
+
+# Compila los plugins y publica los .cs3 + plugins.json + repo.json en la rama "builds"
+on:
+  push:
+    branches-ignore:
+      - builds
+    paths-ignore:
+      - "**.md"
+      - "nuvio/**"
+  workflow_dispatch:
+
+concurrency:
+  group: build
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+          log-accepted-android-sdk-licenses: false
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Compilar plugins
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon make makePluginsJson ensureJarCompatibility
+
+      - name: Preparar distribución
+        run: |
+          mkdir -p dist
+          cp */build/*.cs3 dist/
+          cp */build/*.jar dist/ 2>/dev/null || true
+          cp build/plugins.json dist/
+          cp repo.json dist/
+          test -s dist/plugins.json
+          test -s dist/Zafiro.cs3
+          # Copia con la versión en el nombre: así CloudStream nunca mezcla un .cs3
+          # en caché con una lista de plugins nueva (error "Mismatched digest").
+          python3 - <<'PY'
+          import json, shutil
+          p = "dist/plugins.json"
+          plugins = json.load(open(p))
+          for pl in plugins:
+              name, ver = pl["internalName"], pl["version"]
+              shutil.copy(f"dist/{name}.cs3", f"dist/{name}-v{ver}.cs3")
+              pl["url"] = pl["url"].replace(f"/builds/{name}.cs3", f"/refs/heads/builds/{name}-v{ver}.cs3")
+          json.dump(plugins, open(p, "w"), indent=4, ensure_ascii=False)
+          # Cada build publica la lista con un NOMBRE nuevo (sin parámetros "?"),
+          # para que ninguna caché (app, proxy u operador) sirva una lista vieja.
+          import os
+          tag = os.environ["GITHUB_SHA"][:7]
+          shutil.copy(p, f"dist/plugins-{tag}.json")
+          base = "https://raw.githubusercontent.com/" + os.environ["GITHUB_REPOSITORY"] + "/refs/heads/builds/"
+          r = "dist/repo.json"
+          repo = json.load(open(r))
+          repo["pluginLists"] = [base + f"plugins-{tag}.json"]
+          json.dump(repo, open(r, "w"), indent=2, ensure_ascii=False)
+          # Copia del repo con otro nombre, para añadirlo en una URL que la app nunca pidió
+          shutil.copy(r, "dist/zafiro.json")
+          PY
+          cat dist/repo.json
+          cat dist/plugins.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zafiro-cloudstream
+          path: dist/
+
+      - name: Publicar en la rama builds
+        run: |
+          git fetch origin builds || true
+          if git show-ref --verify --quiet refs/remotes/origin/builds; then
+            git worktree add publication origin/builds
+            git -C publication checkout -B builds origin/builds
+          else
+            git worktree add --detach publication
+            git -C publication checkout --orphan builds
+            git -C publication rm -rf . || true
+          fi
+          # Se conservan las listas plugins-<sha>.json y los .cs3 versionados antiguos: algo en caché
+          # que apunte a una de ellas no debe dar 404.
+          git -C publication ls-files -z | grep -zvE '^plugins-.*\.json$|-v[0-9]+\.cs3$' \
+            | xargs -0 -r -I '{}' rm -f -- "publication/{}"
+          cp dist/* publication/
+          # Todas las listas antiguas pasan a tener el contenido actual: así, aunque la app
+          # (o una caché) siga usando un repo.json viejo, la lista a la que apunta es la última.
+          for old in publication/plugins-*.json; do
+            cp dist/plugins.json "$old"
+          done
+          git -C publication config user.name "github-actions[bot]"
+          git -C publication config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C publication add -A
+          git -C publication commit -m "Compilación automática $GITHUB_SHA" || exit 0
+          git -C publication push origin HEAD:builds
+
+      - name: Purgar caché de jsDelivr
+        # Algunas instalaciones de CloudStream leen raw.githubusercontent.com a través de
+        # jsDelivr, que guarda los archivos de una rama hasta 12 h. Se purgan todas las listas.
+        continue-on-error: true
+        run: |
+          # raw.githubusercontent.com tarda hasta 5 min en servir lo nuevo; si se purga antes,
+          # jsDelivr vuelve a guardar la versión anterior durante horas.
+          sleep 360
+          files="zafiro.json repo.json plugins.json Zafiro.cs3 $(cd publication && ls plugins-*.json)"
+          for f in $files; do
+            for ref in builds refs/heads/builds; do
+              url="https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@${ref}/${f}"
+              echo "$url -> $(curl -s -o /dev/null -w '%{http_code}' "$url")"
+            done
+          done
