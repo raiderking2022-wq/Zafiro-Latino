@@ -269,59 +269,119 @@ class Zafiro : MainAPI() {
      *   rd.php          -> redirige al servidor real (p. ej. voe.sx/e/ID)
      * Se reproduce ese recorrido enviando los formularios igual que el navegador.
      */
+    private val urlInText = Regex("""https?:\\?/\\?/[^\s'"<>()]+""")
+
+    /** Busca el enlace del servidor de video en un HTML: en claro o codificado en base64 (hasta 3 capas). */
+    private fun findTarget(html: String): String? {
+        urlInText.findAll(html).map { it.value.replace("\\/", "/") }
+            .firstOrNull { embedRegex.containsMatchIn(it) }?.let { return it }
+        for (m in Regex("[A-Za-z0-9+/_-]{24,}={0,2}").findAll(html)) {
+            var v = m.value
+            for (layer in 0 until 3) {
+                val norm = v.replace('-', '+').replace('_', '/').let { it + "=".repeat((4 - it.length % 4) % 4) }
+                val dec = runCatching { String(base64DecodeArray(norm)) }.getOrNull() ?: break
+                if (dec.any { it.code < 9 }) break
+                urlInText.findAll(dec).map { it.value.replace("\\/", "/") }
+                    .firstOrNull { embedRegex.containsMatchIn(it) }?.let { return it }
+                v = dec.trim()
+            }
+        }
+        return null
+    }
+
+    /** Siguiente página por JavaScript o meta refresh (location.href = "...", etc.). */
+    private fun jsRedirect(html: String, base: String): String? {
+        org.jsoup.Jsoup.parse(html).selectFirst("meta[http-equiv=refresh]")?.attr("content")
+            ?.substringAfter("url=", "")?.trim()?.trim('\'', '"')?.takeIf { it.isNotBlank() }
+            ?.let { return absUrl(base, it) }
+        return Regex("""(?:location(?:\.href)?\s*=|location\.(?:replace|assign)\()\s*['"]([^'"]+)['"]""")
+            .find(html)?.groupValues?.get(1)?.let { absUrl(base, it) }
+    }
+
+    /**
+     * Cadena real del sitio (vista con la versión de diagnóstico):
+     *   goto.php (formulario) -> rd.php -> redir_ddh.php (formulario) -> fotise.com ("Stream API")
+     *   -> artículos de un acortador "safelink" -> servidor de video (voe.sx/e/ID ...).
+     * Se recorren formularios, redirecciones y saltos por JavaScript como un navegador,
+     * con cookies y Referer, y en cada página se busca el enlace final (en claro o base64).
+     */
     private suspend fun gotoCandidates(playerUrl: String, pageUrl: String, log: MutableList<String>): List<String> {
         val gotoUrl = playerUrl.replace("/player.php", "/goto.php")
         val code = Regex("[?&]h=([^&]+)").find(playerUrl)?.groupValues?.get(1)
-        val out = mutableListOf<String>()
+        val cookies = mutableMapOf<String, String>()
+        fun keepCookies(res: com.lagradost.nicehttp.NiceResponse) {
+            res.headers.values("set-cookie").forEach { c ->
+                val kv = c.substringBefore(";")
+                if ("=" in kv) cookies[kv.substringBefore("=").trim()] = kv.substringAfter("=").trim()
+            }
+        }
         try {
             var url = gotoUrl
+            var referer: String? = null
             val first = app.get(gotoUrl, timeout = 15L)
-            log += "goto ${first.code} form=${first.text.contains("<form")} ${snippet(first.text)}"
+            keepCookies(first)
+            log += "goto ${first.code} ${snippet(first.text)}"
             if (!first.url.contains("cinehdplus")) return listOf(first.url)
             var html: String = first.text
 
-            for (step in 0 until 4) {
-                val form = org.jsoup.Jsoup.parse(html).selectFirst("form[action]")
-                val action: String
-                val fields: Map<String, String>
-                if (form != null) {
-                    action = absUrl(url, form.attr("action"))
-                    fields = form.select("input[name]").associate { it.attr("name") to it.attr("value") }
-                } else if (step == 0 && code != null) {
-                    // Por si goto.php cambia de aspecto: probar rd.php directamente
-                    action = absUrl(url, "rd.php")
-                    fields = mapOf("url" to code)
-                } else {
-                    out += candidatesFromHtml(html)
-                    break
+            for (step in 0 until 8) {
+                findTarget(html)?.let {
+                    log += "objetivo encontrado en paso $step: $it"
+                    return listOf(it)
                 }
-
-                val isGet = form != null && form.attr("method").equals("get", ignoreCase = true)
-                val res = if (isGet) {
-                    app.get(action, params = fields, allowRedirects = false, timeout = 15L)
-                } else {
-                    app.post(action, data = fields, allowRedirects = false, timeout = 15L)
-                }
-
-                val loc = res.headers["location"]
-                log += "${action.substringAfterLast('/')} ${res.code} loc=${loc ?: "-"} ${snippet(res.text)}"
-                if (!loc.isNullOrBlank()) {
-                    val next = absUrl(action, loc)
-                    if (!next.contains("cinehdplus")) {
-                        out += next
-                        break
+                val form = org.jsoup.Jsoup.parse(html).selectFirst("form")
+                val res = if (form != null || (step == 0 && code != null)) {
+                    val action = if (form != null) absUrl(url, form.attr("action").ifBlank { url })
+                    else absUrl(url, "rd.php")
+                    val fields = form?.select("input[name], textarea[name]")
+                        ?.associate { it.attr("name") to it.attr("value") }
+                        ?: mapOf("url" to code!!)
+                    val isGet = form != null && form.attr("method").equals("get", ignoreCase = true)
+                    val r = if (isGet) {
+                        app.get(action, params = fields, referer = referer, cookies = cookies,
+                            allowRedirects = false, timeout = 15L)
+                    } else {
+                        app.post(action, data = fields, referer = referer, cookies = cookies,
+                            allowRedirects = false, timeout = 15L)
                     }
+                    referer = url
+                    url = action
+                    r
+                } else {
+                    val next = jsRedirect(html, url) ?: run {
+                        log += "sin formulario ni redirección en paso $step"
+                        return emptyList()
+                    }
+                    if (embedRegex.containsMatchIn(next)) return listOf(next)
+                    val r = app.get(next, referer = url, cookies = cookies, allowRedirects = false, timeout = 15L)
+                    referer = url
                     url = next
-                    html = app.get(next, timeout = 15L).text
-                    continue
+                    r
                 }
-                url = action
+                keepCookies(res)
+                var loc = res.headers["location"]
+                log += "${url.substringAfter("://").take(40)} ${res.code} loc=${loc ?: "-"} ${snippet(res.text)}"
                 html = res.text
+                // Seguir cadenas de redirecciones HTTP
+                var hops = 0
+                while (!loc.isNullOrBlank() && hops < 5) {
+                    val next = absUrl(url, loc)
+                    if (embedRegex.containsMatchIn(next)) return listOf(next)
+                    val r = app.get(next, referer = url, cookies = cookies, allowRedirects = false, timeout = 15L)
+                    keepCookies(r)
+                    referer = url
+                    url = next
+                    html = r.text
+                    loc = r.headers["location"]
+                    hops++
+                }
             }
+            findTarget(html)?.let { return listOf(it) }
+            log += "fin de la cadena sin enlace"
         } catch (e: Exception) {
             log += "ERROR ${e.javaClass.simpleName}: ${e.message?.take(80)}"
         }
-        return out.distinct()
+        return emptyList()
     }
 
     /** Texto corto de una respuesta, para el diagnóstico. */
