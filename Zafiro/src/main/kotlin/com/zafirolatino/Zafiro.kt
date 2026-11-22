@@ -247,39 +247,72 @@ class Zafiro : MainAPI() {
             .distinct()
     }
 
+    private fun absUrl(base: String, href: String): String {
+        val h = href.trim()
+        return when {
+            h.startsWith("http") -> h
+            h.startsWith("//") -> "https:$h"
+            h.startsWith("/") -> (Regex("^https?://[^/]+").find(base)?.value ?: "") + h
+            else -> base.substringBefore("?").substringBeforeLast("/") + "/" + h
+        }
+    }
+
     /**
-     * Los servidores apuntan a //api.cinehdplus.org/ir/player.php?h=<cifrado>.
-     * player.php solo muestra un botón de play que enlaza a goto.php?h=<mismo código>,
-     * y goto.php es quien manda al reproductor real (voe, streamtape, mixdrop...).
+     * Cadena real del sitio (vista en el código de goto.php):
+     *   player.php?h=X  -> botón play -> goto.php?h=X
+     *   goto.php        -> "Anonimizador": formulario que se envía solo
+     *                      <form action="rd.php" method="POST"><input name="url" value="X"></form>
+     *   rd.php          -> redirige al servidor real (p. ej. voe.sx/e/ID)
+     * Se reproduce ese recorrido enviando los formularios igual que el navegador.
      */
     private suspend fun gotoCandidates(playerUrl: String, pageUrl: String): List<String> {
         val gotoUrl = playerUrl.replace("/player.php", "/goto.php")
+        val code = Regex("[?&]h=([^&]+)").find(playerUrl)?.groupValues?.get(1)
         val out = mutableListOf<String>()
+        try {
+            var url = gotoUrl
+            val first = app.get(gotoUrl, timeout = 15L)
+            if (!first.url.contains("cinehdplus")) return listOf(first.url)
+            var html: String = first.text
 
-        // 1) Redirección HTTP: leer la cabecera Location sin seguirla
-        runCatching {
-            val res = app.get(gotoUrl, referer = playerUrl, allowRedirects = false, timeout = 15L)
-            res.headers["location"]?.takeIf { it.isNotBlank() }?.let { out += fixScheme(it) }
-            if (out.isEmpty()) out += candidatesFromHtml(res.text)
-        }
-        // 2) Siguiendo redirecciones hasta el final
-        if (out.isEmpty()) runCatching {
-            val res = app.get(gotoUrl, referer = playerUrl, timeout = 15L)
-            if (!res.url.contains("cinehdplus")) out += res.url
-            else out += candidatesFromHtml(res.text)
-        }
-        // 3) Por si el botón cambia: buscar el enlace real en player.php
-        if (out.isEmpty()) runCatching {
-            val res = app.get(playerUrl, referer = pageUrl)
-            res.document.selectFirst("a[href*=goto.php]")?.attr("href")?.let { href ->
-                val abs = if (href.startsWith("http") || href.startsWith("//")) fixScheme(href)
-                else playerUrl.substringBeforeLast("/") + "/" + href
-                if (abs != gotoUrl) {
-                    val r2 = app.get(abs, referer = playerUrl)
-                    if (!r2.url.contains("cinehdplus")) out += r2.url else out += candidatesFromHtml(r2.text)
+            for (step in 0 until 4) {
+                val form = org.jsoup.Jsoup.parse(html).selectFirst("form[action]")
+                val action: String
+                val fields: Map<String, String>
+                if (form != null) {
+                    action = absUrl(url, form.attr("action"))
+                    fields = form.select("input[name]").associate { it.attr("name") to it.attr("value") }
+                } else if (step == 0 && code != null) {
+                    // Por si goto.php cambia de aspecto: probar rd.php directamente
+                    action = absUrl(url, "rd.php")
+                    fields = mapOf("url" to code)
+                } else {
+                    out += candidatesFromHtml(html)
+                    break
                 }
+
+                val isGet = form != null && form.attr("method").equals("get", ignoreCase = true)
+                val res = if (isGet) {
+                    app.get(action, params = fields, allowRedirects = false, timeout = 15L)
+                } else {
+                    app.post(action, data = fields, allowRedirects = false, timeout = 15L)
+                }
+
+                val loc = res.headers["location"]
+                if (!loc.isNullOrBlank()) {
+                    val next = absUrl(action, loc)
+                    if (!next.contains("cinehdplus")) {
+                        out += next
+                        break
+                    }
+                    url = next
+                    html = app.get(next, timeout = 15L).text
+                    continue
+                }
+                url = action
+                html = res.text
             }
-            if (out.isEmpty()) out += candidatesFromHtml(res.text)
+        } catch (e: Exception) {
         }
         return out.distinct()
     }
