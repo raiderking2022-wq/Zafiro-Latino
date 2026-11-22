@@ -14,10 +14,10 @@ Repositorio de extensiones para [CloudStream](https://github.com/recloudstream/c
 2. Pega esta URL:
 
    ```
-   https://raw.githubusercontent.com/raiderking2022-wq/Zafiro-Latino/builds/repo.json
+   https://raw.githubusercontent.com/raiderking2022-wq/Zafiro-Latino/refs/heads/builds/repo.json
    ```
 
-   (o directamente la lista de plugins: `https://raw.githubusercontent.com/raiderking2022-wq/Zafiro-Latino/builds/plugins.json`)
+   (o directamente la lista de plugins: `https://raw.githubusercontent.com/raiderking2022-wq/Zafiro-Latino/refs/heads/builds/plugins.json`)
 3. Instala **Zafiro**.
 
 ## Compilar
