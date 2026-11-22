@@ -64,14 +64,18 @@ jobs:
               shutil.copy(f"dist/{name}.cs3", f"dist/{name}-v{ver}.cs3")
               pl["url"] = pl["url"].replace(f"/builds/{name}.cs3", f"/refs/heads/builds/{name}-v{ver}.cs3")
           json.dump(plugins, open(p, "w"), indent=4, ensure_ascii=False)
-          # repo.json apunta a la lista con un parámetro distinto en cada build,
+          # Cada build publica la lista con un NOMBRE nuevo (sin parámetros "?"),
           # para que ninguna caché (app, proxy u operador) sirva una lista vieja.
           import os
+          tag = os.environ["GITHUB_SHA"][:7]
+          shutil.copy(p, f"dist/plugins-{tag}.json")
+          base = "https://raw.githubusercontent.com/" + os.environ["GITHUB_REPOSITORY"] + "/refs/heads/builds/"
           r = "dist/repo.json"
           repo = json.load(open(r))
-          tag = os.environ["GITHUB_SHA"][:7]
-          repo["pluginLists"] = [u.split("?")[0] + "?v=" + tag for u in repo["pluginLists"]]
+          repo["pluginLists"] = [base + f"plugins-{tag}.json"]
           json.dump(repo, open(r, "w"), indent=2, ensure_ascii=False)
+          # Copia del repo con otro nombre, para añadirlo en una URL que la app nunca pidió
+          shutil.copy(r, "dist/zafiro.json")
           PY
           cat dist/repo.json
           cat dist/plugins.json
@@ -92,7 +96,10 @@ jobs:
             git -C publication checkout --orphan builds
             git -C publication rm -rf . || true
           fi
-          git -C publication ls-files -z | xargs -0 -r -I '{}' rm -f -- "publication/{}"
+          # Se conservan las listas plugins-<sha>.json y los .cs3 versionados antiguos: algo en caché
+          # que apunte a una de ellas no debe dar 404.
+          git -C publication ls-files -z | grep -zvE '^plugins-.*\.json$|-v[0-9]+\.cs3$' \
+            | xargs -0 -r -I '{}' rm -f -- "publication/{}"
           cp dist/* publication/
           git -C publication config user.name "github-actions[bot]"
           git -C publication config user.email "41898282+github-actions[bot]@users.noreply.github.com"
