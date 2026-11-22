@@ -19,6 +19,19 @@ Repositorio de extensiones para [CloudStream](https://github.com/recloudstream/c
    ```
 3. Instala **Zafiro**.
 
+## Nuvio
+
+La misma extensión existe como proveedor para Nuvio en `nuvio/`, con sus propios extractores de
+VOE, Streamtape y Mixdrop, porque Nuvio no los trae. En Nuvio: **Ajustes → Plugins / Proveedores → Añadir
+repositorio**:
+
+```
+https://raw.githubusercontent.com/raiderking2022-wq/Zafiro-Latino/refs/heads/main/nuvio/manifest.json
+```
+
+Al cambiar `nuvio/providers/zafiro.js`, sube la versión en `nuvio/manifest.json`, tanto en `version` como en
+`filename?v=`.
+
 ## Cómo funciona Zafiro
 
 Cada servidor de CineHDPlus pasa por una cadena de páginas antes del video:
