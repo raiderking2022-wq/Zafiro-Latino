@@ -6,7 +6,7 @@ Repositorio de extensiones para [CloudStream](https://github.com/recloudstream/c
 
 | Plugin | Sitio | Contenido |
 |---|---|---|
-| CineHDPlus | https://cinehdplus.org | Películas y series |
+| Zafiro | https://cinehdplus.org | Películas y series |
 
 ## Instalar en CloudStream
 
@@ -18,7 +18,7 @@ Repositorio de extensiones para [CloudStream](https://github.com/recloudstream/c
    ```
 
    (o directamente la lista de plugins: `https://raw.githubusercontent.com/raiderking2022-wq/Zafiro-Latino/builds/plugins.json`)
-3. Instala **CineHDPlus**.
+3. Instala **Zafiro**.
 
 ## Compilar
 
@@ -28,7 +28,7 @@ GitHub Actions (`.github/workflows/build.yml`) compila cada push y publica los `
 Localmente (requiere JDK 17 y Android SDK):
 
 ```
-gradle CineHDPlus:make
+gradle Zafiro:make
 ```
 
 Al cambiar un plugin, sube `version` en su `build.gradle.kts` para que CloudStream ofrezca la actualización.

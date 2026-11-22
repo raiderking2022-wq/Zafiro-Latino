@@ -3,7 +3,7 @@ version = 1
 
 cloudstream {
     language = "es"
-    description = "Películas y series online en español desde CineHDPlus"
+    description = "Zafiro: películas y series online en español (fuente: CineHDPlus)"
     authors = listOf("raiderking2022-wq")
 
     /**

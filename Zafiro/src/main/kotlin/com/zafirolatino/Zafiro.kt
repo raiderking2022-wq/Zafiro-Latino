@@ -7,9 +7,9 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
 
-class CineHDPlus : MainAPI() {
+class Zafiro : MainAPI() {
     override var mainUrl = "https://cinehdplus.org"
-    override var name = "CineHDPlus"
+    override var name = "Zafiro"
     override var lang = "es"
     override val hasMainPage = true
     override val hasQuickSearch = false
