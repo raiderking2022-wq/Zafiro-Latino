@@ -1,4 +1,4 @@
-/* Zafiro 1.0.0 - Proveedor nativo para Nuvio (películas y series de CineHDPlus).
+/* Zafiro 1.0.1 - Proveedor nativo para Nuvio (películas y series de CineHDPlus).
  * Misma lógica que el plugin Zafiro de CloudStream, pero con extractores propios
  * (Nuvio no trae extractores de VOE/Streamtape/Mixdrop).
  * Sin eval, sin claves incrustadas, sin dependencias de Node.
@@ -160,6 +160,17 @@ function parseCards(html) {
     var y = /((?:19|20)\d{2})\s*·/.exec(m[3]);
     out.push({ url: m[1], title: title, year: y ? +y[1] : 0, serie: m[2] === 'series-tv' });
   }
+  // Página de resultados de búsqueda: enlace vacío con aria-label, y el resto de datos
+  // (título original, año) en el bloque que sigue hasta la próxima tarjeta.
+  var re2 = /<a\s[^>]*href="(https:\/\/cinehdplus\.org\/(pelicula|series-tv)-\d+\/[^"]+)"[^>]*aria-label="([^"]+)"[^>]*>\s*<\/a>([\s\S]*?)(?=<a\s[^>]*href="https:\/\/cinehdplus\.org\/(?:pelicula|series-tv)-\d+\/[^"]+"[^>]*aria-label=|<\/main>|$)/g;
+  while ((m = re2.exec(html))) {
+    var orig = /<\/h3>\s*<span[^>]*>\s*([^<]+?)\s*<\/span>/.exec(m[4]);
+    var yr = /<\/svg>\s*((?:19|20)\d{2})\s*</.exec(m[4]);
+    out.push({
+      url: m[1], title: decode(m[3]).trim(), original: orig ? decode(orig[1]).trim() : '',
+      year: yr ? +yr[1] : 0, serie: m[2] === 'series-tv'
+    });
+  }
   var seen = {};
   return out.filter(function (c) { return seen[c.url] ? false : (seen[c.url] = true); });
 }
@@ -181,10 +192,12 @@ function findPage(meta, type) {
 
   function score(card) {
     if ((type === 'tv') !== card.serie) return -1;
-    var n = norm(card.title), s;
-    if (wanted.indexOf(n) >= 0) s = 100;
-    else if (wanted.some(function (w) { return n.indexOf(w) === 0 || w.indexOf(n) === 0; })) s = 60;
-    else return -1;
+    var names = [card.title, card.original].filter(Boolean).map(norm).filter(Boolean), s = 0;
+    names.forEach(function (n) {
+      if (wanted.indexOf(n) >= 0) s = Math.max(s, 100);
+      else if (wanted.some(function (w) { return n.indexOf(w) === 0 || w.indexOf(n) === 0; })) s = Math.max(s, 60);
+    });
+    if (!s) return -1;
     if (meta.year && card.year) {
       var d = Math.abs(meta.year - card.year);
       if (d === 0) s += 30; else if (d === 1) s += 15; else if (type !== 'tv') s -= 40;
@@ -454,7 +467,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = { getStreams: getStreams };
   // Uso interno del addon en Vercel (y de las pruebas); Nuvio solo usa getStreams.
   module.exports._internal = {
-    get: get, parseCards: parseCards, serversFromPage: serversFromPage, findEpisode: findEpisode,
+    get: get, parseCards: parseCards, findPage: findPage, serversFromPage: serversFromPage, findEpisode: findEpisode,
     resolveServer: resolveServer, findTarget: findTarget, firstForm: firstForm,
     voeDecode: voeDecode, unpack: unpack, b64decode: b64decode, decode: decode, HOST_RE: HOST_RE
   };

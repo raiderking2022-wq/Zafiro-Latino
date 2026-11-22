@@ -89,11 +89,35 @@ class Zafiro : MainAPI() {
         }
     }
 
-    private fun Document.cards(): List<SearchResponse> =
-        select("a[href*=/pelicula-], a[href*=/series-tv-]")
+    private fun Document.cards(): List<SearchResponse> {
+        // Portada y listados: el enlace envuelve la imagen y el título
+        val normal = select("a[href*=/pelicula-], a[href*=/series-tv-]")
             .filter { it.selectFirst("img") != null }
             .mapNotNull { it.toSearchResult() }
-            .distinctBy { it.url }
+        // Resultados de búsqueda: enlace vacío con aria-label; imagen y año en el bloque padre
+        val search = select("a[aria-label][href*=/pelicula-], a[aria-label][href*=/series-tv-]")
+            .filter { it.selectFirst("img") == null }
+            .mapNotNull { a ->
+                val href = fixUrlNull(a.attr("href")) ?: return@mapNotNull null
+                val title = a.attr("aria-label").trim().takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val block = a.parent() ?: return@mapNotNull null
+                val poster = block.imageUrl()
+                val year = Regex("\\b(19|20)\\d{2}\\b").find(block.select("div.inline-flex").text())
+                    ?.value?.toIntOrNull()
+                if (typeFromUrl(href) == TvType.TvSeries) {
+                    newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+                        this.posterUrl = poster
+                        this.year = year
+                    }
+                } else {
+                    newMovieSearchResponse(title, href, TvType.Movie) {
+                        this.posterUrl = poster
+                        this.year = year
+                    }
+                }
+            }
+        return (normal + search).distinctBy { it.url }
+    }
 
     // ---------- Página principal y búsqueda ----------
 
