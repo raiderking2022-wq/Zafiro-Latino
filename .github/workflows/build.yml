@@ -101,6 +101,11 @@ jobs:
           git -C publication ls-files -z | grep -zvE '^plugins-.*\.json$|-v[0-9]+\.cs3$' \
             | xargs -0 -r -I '{}' rm -f -- "publication/{}"
           cp dist/* publication/
+          # Todas las listas antiguas pasan a tener el contenido actual: así, aunque la app
+          # (o una caché) siga usando un repo.json viejo, la lista a la que apunta es la última.
+          for old in publication/plugins-*.json; do
+            cp dist/plugins.json "$old"
+          done
           git -C publication config user.name "github-actions[bot]"
           git -C publication config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git -C publication add -A
@@ -109,10 +114,11 @@ jobs:
 
       - name: Purgar caché de jsDelivr
         # Algunas instalaciones de CloudStream leen raw.githubusercontent.com a través de
-        # jsDelivr, que guarda los archivos de una rama hasta 12 h. Se purgan los fijos.
+        # jsDelivr, que guarda los archivos de una rama hasta 12 h. Se purgan todas las listas.
         continue-on-error: true
         run: |
-          for f in zafiro.json repo.json plugins.json Zafiro.cs3; do
+          files="zafiro.json repo.json plugins.json Zafiro.cs3 $(cd publication && ls plugins-*.json)"
+          for f in $files; do
             for ref in builds refs/heads/builds; do
               url="https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@${ref}/${f}"
               echo "$url -> $(curl -s -o /dev/null -w '%{http_code}' "$url")"
