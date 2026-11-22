@@ -64,7 +64,16 @@ jobs:
               shutil.copy(f"dist/{name}.cs3", f"dist/{name}-v{ver}.cs3")
               pl["url"] = pl["url"].replace(f"/builds/{name}.cs3", f"/refs/heads/builds/{name}-v{ver}.cs3")
           json.dump(plugins, open(p, "w"), indent=4, ensure_ascii=False)
+          # repo.json apunta a la lista con un parámetro distinto en cada build,
+          # para que ninguna caché (app, proxy u operador) sirva una lista vieja.
+          import os
+          r = "dist/repo.json"
+          repo = json.load(open(r))
+          tag = os.environ["GITHUB_SHA"][:7]
+          repo["pluginLists"] = [u.split("?")[0] + "?v=" + tag for u in repo["pluginLists"]]
+          json.dump(repo, open(r, "w"), indent=2, ensure_ascii=False)
           PY
+          cat dist/repo.json
           cat dist/plugins.json
 
       - uses: actions/upload-artifact@v4
