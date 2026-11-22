@@ -240,11 +240,11 @@ class Zafiro : MainAPI() {
                 callback(link)
             } else {
                 callback(
-                    newExtractorLink(link.source, "${link.name} [$lang]", link.url, link.type) {
+                    newExtractorLink(link.source, "${link.name} [$lang]", link.url) {
                         this.referer = link.referer
                         this.quality = link.quality
+                        this.type = link.type
                         this.headers = link.headers
-                        this.extractorData = link.extractorData
                     }
                 )
             }

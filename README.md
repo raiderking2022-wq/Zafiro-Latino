@@ -28,7 +28,7 @@ GitHub Actions (`.github/workflows/build.yml`) compila cada push y publica los `
 Localmente (requiere JDK 17 y Android SDK):
 
 ```
-gradle Zafiro:make
+./gradlew Zafiro:make
 ```
 
 Al cambiar un plugin, sube `version` en su `build.gradle.kts` para que CloudStream ofrezca la actualización.
