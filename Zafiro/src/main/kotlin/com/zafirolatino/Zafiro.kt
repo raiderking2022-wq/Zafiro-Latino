@@ -2,6 +2,7 @@ package com.zafirolatino
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -198,32 +199,100 @@ class Zafiro : MainAPI() {
         "w3.org", "recaptcha", "gstatic", "fonts.googleapis"
     )
 
+    /** Dominio "oficial" de cada servidor, por si el sitio usa un espejo que el extractor no reconoce. */
+    private val canonicalHosts = mapOf(
+        "voe" to "https://voe.sx",
+        "streamtape" to "https://streamtape.com",
+        "mixdrop" to "https://mixdrop.ag",
+        "mixdropp" to "https://mixdrop.ag",
+        "streamplay" to "https://streamplay.to",
+        "filemoon" to "https://filemoon.sx",
+        "streamwish" to "https://streamwish.to",
+        "doodstream" to "https://dood.la",
+        "uqload" to "https://uqload.to",
+    )
+
+    /** Peticiones que delatan el reproductor real dentro de player.php. */
+    private val embedRegex = Regex(
+        """^https?://(?![^/]*cinehdplus)[^/]*(?:voe|streamtape|tape|mixdrop|streamplay|filemoon|""" +
+            """streamwish|wish|dood|uqload|vidhide|filelions|lulu|vidguard|ok\.ru|""" +
+            """[^/]+/(?:e|embed|v|f|d)/)[^\s]*""",
+        RegexOption.IGNORE_CASE
+    )
+
     /**
      * Los servidores apuntan a //api.cinehdplus.org/ir/player.php?h=<cifrado>.
-     * Esa página redirige o incrusta el reproductor real (voe, streamtape, mixdrop...).
+     * Devuelve las URLs candidatas del reproductor real leyendo el HTML (redirección,
+     * iframe, meta refresh o URLs dentro de scripts).
      */
-    private suspend fun resolvePlayer(url: String, referer: String): String? {
+    private suspend fun staticCandidates(url: String, referer: String): List<String> {
         val res = app.get(url, referer = referer)
-        if (!res.url.contains("cinehdplus")) return res.url
+        if (!res.url.contains("cinehdplus")) return listOf(res.url)
 
         val doc = res.document
-        doc.selectFirst("iframe[src]")?.attr("src")?.takeIf { it.isNotBlank() }
-            ?.let { return fixScheme(it) }
-        doc.selectFirst("meta[http-equiv=refresh]")?.attr("content")
-            ?.substringAfter("url=", "")?.trim()?.takeIf { it.isNotBlank() }
-            ?.let { return fixScheme(it) }
-
         val html = res.text
-        Regex("""(?:location(?:\.href)?\s*=|location\.replace\(|window\.open\(|src\s*[:=]|url\s*[:=])\s*['"]((?:https?:)?//[^'"]+)['"]""")
-            .find(html)?.groupValues?.get(1)
-            ?.takeIf { u -> ignoredHosts.none { u.contains(it) } }
-            ?.let { return fixScheme(it.replace("\\/", "/")) }
+        val out = mutableListOf<String>()
+        doc.select("iframe[src], iframe[data-src]").forEach {
+            out += it.attr("src").ifBlank { it.attr("data-src") }
+        }
+        doc.selectFirst("meta[http-equiv=refresh]")?.attr("content")
+            ?.substringAfter("url=", "")?.trim()?.let { out += it }
+        Regex("""https?:\\?/\\?/[^\s'"<>()]+""").findAll(html)
+            .forEach { out += it.value.replace("\\/", "/") }
 
-        return Regex("""https?:\\?/\\?/[^\s'"<>]+""").findAll(html)
-            .map { it.value.replace("\\/", "/") }
-            .firstOrNull { u ->
-                ignoredHosts.none { u.contains(it) } && !u.endsWith(".js") && !u.endsWith(".css")
+        return out.map { fixScheme(it.trim()) }
+            .filter { u ->
+                u.startsWith("http") && ignoredHosts.none { u.contains(it) } &&
+                    !u.endsWith(".js") && !u.endsWith(".css") && !u.endsWith(".png") &&
+                    !u.endsWith(".svg") && !u.endsWith(".jpg")
             }
+            .distinct()
+    }
+
+    /** Abre player.php en un WebView oculto y captura la petición al servidor de video. */
+    private suspend fun webViewCandidate(url: String, referer: String): String? = runCatching {
+        val res = app.get(url, referer = referer, interceptor = WebViewResolver(embedRegex))
+        res.url.takeIf { !it.contains("cinehdplus") }
+    }.getOrNull()
+
+    /** Igual que [extract] pero probando también el dominio oficial del servidor. */
+    private suspend fun tryExtract(
+        target: String,
+        domain: String?,
+        referer: String,
+        lang: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        if (runCatching { extract(target, referer, lang, subtitleCallback, callback) }.getOrDefault(false)) {
+            return true
+        }
+        val canonical = domain?.lowercase()?.let { canonicalHosts[it] } ?: return false
+        val path = Regex("^https?://[^/]+(/.*)$").find(target)?.groupValues?.get(1) ?: return false
+        val alt = canonical + path
+        if (alt == target) return false
+        return runCatching { extract(alt, referer, lang, subtitleCallback, callback) }.getOrDefault(false)
+    }
+
+    private suspend fun resolveServer(
+        playerUrl: String,
+        domain: String?,
+        pageUrl: String,
+        lang: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        if (!playerUrl.contains("cinehdplus")) {
+            return tryExtract(playerUrl, domain, pageUrl, lang, subtitleCallback, callback)
+        }
+        // 1) Lectura directa del HTML de player.php
+        val candidates = runCatching { staticCandidates(playerUrl, pageUrl) }.getOrDefault(emptyList())
+        for (c in candidates) {
+            if (tryExtract(c, domain, playerUrl, lang, subtitleCallback, callback)) return true
+        }
+        // 2) WebView: deja que la página descifre el enlace y captura la petición
+        val captured = webViewCandidate(playerUrl, pageUrl) ?: return false
+        return tryExtract(captured, domain, playerUrl, lang, subtitleCallback, callback)
     }
 
     /** Llama al extractor y añade el idioma al nombre del enlace. */
@@ -266,25 +335,15 @@ class Zafiro : MainAPI() {
         servers.forEach { btn ->
             val playerUrl = fixScheme(btn.attr("data-url"))
             val lang = btn.attr("data-lang").ifBlank { null }
-            runCatching {
-                val target = if (playerUrl.contains("cinehdplus")) resolvePlayer(playerUrl, data)
-                else playerUrl
-                if (target != null && extract(target, playerUrl, lang, subtitleCallback, callback)) {
-                    found = true
-                }
-            }
+            val domain = btn.attr("data-domain").ifBlank { null }
+            if (resolveServer(playerUrl, domain, data, lang, subtitleCallback, callback)) found = true
         }
 
         // Respaldo: iframe principal si no se encontraron botones de servidor
         if (servers.isEmpty()) {
             doc.select("iframe#main-player-iframe, iframe[src*=player]").forEach { f ->
                 val src = fixScheme(f.attr("src"))
-                runCatching {
-                    val target = if (src.contains("cinehdplus")) resolvePlayer(src, data) else src
-                    if (target != null && extract(target, src, null, subtitleCallback, callback)) {
-                        found = true
-                    }
-                }
+                if (resolveServer(src, null, data, null, subtitleCallback, callback)) found = true
             }
         }
         return found
