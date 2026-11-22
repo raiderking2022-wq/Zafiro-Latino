@@ -1,11 +1,11 @@
 [
     {
         "iconUrl": "https://www.google.com/s2/favicons?domain=cinehdplus.org&sz=%size%",
-        "jarFileSize": 108815,
-        "fileHash": "sha256-4e4f3bfc1d54eb9dc83a86873f9a36451c8dc25cc62f18c0ec85bee965fa055d",
+        "jarFileSize": 117371,
+        "fileHash": "sha256-3c4595f1ae61a3df15ab6183d456bc12a816b110692b8ab71f455e445f82807a",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/raiderking2022-wq/Zafiro-Latino",
-        "fileSize": 32642,
+        "fileSize": 36210,
         "status": 1,
         "language": "es",
         "authors": [
@@ -15,12 +15,12 @@
             "Movie",
             "TvSeries"
         ],
-        "version": 11,
+        "version": 12,
         "internalName": "Zafiro",
         "jarUrl": "https://raw.githubusercontent.com/raiderking2022-wq/Zafiro-Latino/builds/Zafiro.jar",
         "description": "Zafiro: películas y series online en español (fuente: CineHDPlus)",
-        "url": "https://raw.githubusercontent.com/raiderking2022-wq/Zafiro-Latino/refs/heads/builds/Zafiro-v11.cs3",
+        "url": "https://raw.githubusercontent.com/raiderking2022-wq/Zafiro-Latino/refs/heads/builds/Zafiro-v12.cs3",
         "name": "Zafiro",
-        "jarHash": "sha256-d12c3d0f03ec94b69d93dbd647acafa422bb35d1ebb12180ad14e54b199dab2f"
+        "jarHash": "sha256-5911da2da5438bd9ba5ddd208963c064a4246d96a5dfcefaca42d6560f142aa5"
     }
 ]
