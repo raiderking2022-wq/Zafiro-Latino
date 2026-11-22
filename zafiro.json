@@ -1,0 +1,8 @@
+{
+  "name": "Zafiro Latino",
+  "description": "Extensiones de CloudStream en español",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/raiderking2022-wq/Zafiro-Latino/refs/heads/builds/plugins-59b6d64.json"
+  ]
+}
