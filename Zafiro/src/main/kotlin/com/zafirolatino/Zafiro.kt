@@ -220,17 +220,9 @@ class Zafiro : MainAPI() {
         RegexOption.IGNORE_CASE
     )
 
-    /**
-     * Los servidores apuntan a //api.cinehdplus.org/ir/player.php?h=<cifrado>.
-     * Devuelve las URLs candidatas del reproductor real leyendo el HTML (redirección,
-     * iframe, meta refresh o URLs dentro de scripts).
-     */
-    private suspend fun staticCandidates(url: String, referer: String): List<String> {
-        val res = app.get(url, referer = referer)
-        if (!res.url.contains("cinehdplus")) return listOf(res.url)
-
-        val doc = res.document
-        val html = res.text
+    /** URLs candidatas del reproductor dentro de un HTML (iframe, meta refresh, scripts). */
+    private fun candidatesFromHtml(html: String): List<String> {
+        val doc = org.jsoup.Jsoup.parse(html)
         val out = mutableListOf<String>()
         doc.select("iframe[src], iframe[data-src]").forEach {
             out += it.attr("src").ifBlank { it.attr("data-src") }
@@ -243,15 +235,57 @@ class Zafiro : MainAPI() {
         return out.map { fixScheme(it.trim()) }
             .filter { u ->
                 u.startsWith("http") && ignoredHosts.none { u.contains(it) } &&
+                    !u.contains("popcash") && !u.contains("image.tmdb.org") &&
                     !u.endsWith(".js") && !u.endsWith(".css") && !u.endsWith(".png") &&
                     !u.endsWith(".svg") && !u.endsWith(".jpg")
             }
             .distinct()
     }
 
+    /**
+     * Los servidores apuntan a //api.cinehdplus.org/ir/player.php?h=<cifrado>.
+     * player.php solo muestra un botón de play que enlaza a goto.php?h=<mismo código>,
+     * y goto.php es quien manda al reproductor real (voe, streamtape, mixdrop...).
+     */
+    private suspend fun gotoCandidates(playerUrl: String, pageUrl: String): List<String> {
+        val gotoUrl = playerUrl.replace("/player.php", "/goto.php")
+        val out = mutableListOf<String>()
+
+        // 1) Redirección HTTP: leer la cabecera Location sin seguirla
+        runCatching {
+            val res = app.get(gotoUrl, referer = playerUrl, allowRedirects = false)
+            res.headers["location"]?.takeIf { it.isNotBlank() }?.let { out += fixScheme(it) }
+            if (out.isEmpty()) out += candidatesFromHtml(res.text)
+        }
+        // 2) Siguiendo redirecciones hasta el final
+        if (out.isEmpty()) runCatching {
+            val res = app.get(gotoUrl, referer = playerUrl)
+            if (!res.url.contains("cinehdplus")) out += res.url
+            else out += candidatesFromHtml(res.text)
+        }
+        // 3) Por si el botón cambia: buscar el enlace real en player.php
+        if (out.isEmpty()) runCatching {
+            val res = app.get(playerUrl, referer = pageUrl)
+            res.document.selectFirst("a[href*=goto.php]")?.attr("href")?.let { href ->
+                val abs = if (href.startsWith("http") || href.startsWith("//")) fixScheme(href)
+                else playerUrl.substringBeforeLast("/") + "/" + href
+                if (abs != gotoUrl) {
+                    val r2 = app.get(abs, referer = playerUrl)
+                    if (!r2.url.contains("cinehdplus")) out += r2.url else out += candidatesFromHtml(r2.text)
+                }
+            }
+            if (out.isEmpty()) out += candidatesFromHtml(res.text)
+        }
+        return out.distinct()
+    }
+
     /** Abre player.php en un WebView oculto y captura la petición al servidor de video. */
     private suspend fun webViewCandidate(url: String, referer: String): String? = runCatching {
-        val res = app.get(url, referer = referer, interceptor = WebViewResolver(embedRegex))
+        val res = app.get(
+            url.replace("/player.php", "/goto.php"),
+            referer = url,
+            interceptor = WebViewResolver(embedRegex)
+        )
         res.url.takeIf { !it.contains("cinehdplus") }
     }.getOrNull()
 
@@ -285,12 +319,12 @@ class Zafiro : MainAPI() {
         if (!playerUrl.contains("cinehdplus")) {
             return tryExtract(playerUrl, domain, pageUrl, lang, subtitleCallback, callback)
         }
-        // 1) Lectura directa del HTML de player.php
-        val candidates = runCatching { staticCandidates(playerUrl, pageUrl) }.getOrDefault(emptyList())
+        // 1) goto.php (lo que abre el botón de play de player.php)
+        val candidates = gotoCandidates(playerUrl, pageUrl)
         for (c in candidates) {
             if (tryExtract(c, domain, playerUrl, lang, subtitleCallback, callback)) return true
         }
-        // 2) WebView: deja que la página descifre el enlace y captura la petición
+        // 2) WebView sobre goto.php: captura la petición al reproductor real
         val captured = webViewCandidate(playerUrl, pageUrl) ?: return false
         return tryExtract(captured, domain, playerUrl, lang, subtitleCallback, callback)
     }
