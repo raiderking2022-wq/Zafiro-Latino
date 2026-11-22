@@ -212,11 +212,16 @@ class Zafiro : MainAPI() {
         "uqload" to "https://uqload.to",
     )
 
-    /** Peticiones que delatan el reproductor real dentro de player.php. */
+    /**
+     * Peticiones que delatan el reproductor real. goto.php redirige primero al dominio
+     * oficial del servidor (p. ej. voe.sx/e/ID) y solo después a espejos con nombres
+     * aleatorios, así que se aceptan solo los dominios oficiales para no confundirlos
+     * con anuncios.
+     */
     private val embedRegex = Regex(
-        """^https?://(?![^/]*cinehdplus)[^/]*(?:voe|streamtape|tape|mixdrop|streamplay|filemoon|""" +
-            """streamwish|wish|dood|uqload|vidhide|filelions|lulu|vidguard|ok\.ru|""" +
-            """[^/]+/(?:e|embed|v|f|d)/)[^\s]*""",
+        """^https?://(?:www\.)?(?:voe\.sx|[a-z0-9-]*streamtape\.[a-z]+|[a-z0-9-]*mixdropp?\.[a-z]+|""" +
+            """[a-z0-9-]*streamplay\.[a-z]+|filemoon\.[a-z]+|streamwish\.[a-z]+|dood\.[a-z]+|""" +
+            """uqload\.[a-z]+)/(?:e|v|f|d|embed|embed-)[/-]?[A-Za-z0-9]+""",
         RegexOption.IGNORE_CASE
     )
 
@@ -284,7 +289,7 @@ class Zafiro : MainAPI() {
         val res = app.get(
             url.replace("/player.php", "/goto.php"),
             referer = url,
-            interceptor = WebViewResolver(embedRegex, timeout = 15_000L)
+            interceptor = WebViewResolver(embedRegex, timeout = 35_000L)
         )
         res.url.takeIf { !it.contains("cinehdplus") }
     }.getOrNull()
