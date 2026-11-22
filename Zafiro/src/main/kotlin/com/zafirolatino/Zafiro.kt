@@ -253,13 +253,13 @@ class Zafiro : MainAPI() {
 
         // 1) Redirección HTTP: leer la cabecera Location sin seguirla
         runCatching {
-            val res = app.get(gotoUrl, referer = playerUrl, allowRedirects = false)
+            val res = app.get(gotoUrl, referer = playerUrl, allowRedirects = false, timeout = 15L)
             res.headers["location"]?.takeIf { it.isNotBlank() }?.let { out += fixScheme(it) }
             if (out.isEmpty()) out += candidatesFromHtml(res.text)
         }
         // 2) Siguiendo redirecciones hasta el final
         if (out.isEmpty()) runCatching {
-            val res = app.get(gotoUrl, referer = playerUrl)
+            val res = app.get(gotoUrl, referer = playerUrl, timeout = 15L)
             if (!res.url.contains("cinehdplus")) out += res.url
             else out += candidatesFromHtml(res.text)
         }
@@ -284,7 +284,7 @@ class Zafiro : MainAPI() {
         val res = app.get(
             url.replace("/player.php", "/goto.php"),
             referer = url,
-            interceptor = WebViewResolver(embedRegex)
+            interceptor = WebViewResolver(embedRegex, timeout = 15_000L)
         )
         res.url.takeIf { !it.contains("cinehdplus") }
     }.getOrNull()
@@ -366,11 +366,15 @@ class Zafiro : MainAPI() {
         var found = false
 
         val servers = doc.select("button.player-tab[data-type=server][data-url]")
-        servers.forEach { btn ->
+        // Todos los servidores a la vez: cada enlace aparece en cuanto se resuelve
+        servers.toList().amap { btn ->
             val playerUrl = fixScheme(btn.attr("data-url"))
             val lang = btn.attr("data-lang").ifBlank { null }
             val domain = btn.attr("data-domain").ifBlank { null }
-            if (resolveServer(playerUrl, domain, data, lang, subtitleCallback, callback)) found = true
+            val ok = runCatching {
+                resolveServer(playerUrl, domain, data, lang, subtitleCallback, callback)
+            }.getOrDefault(false)
+            if (ok) found = true
         }
 
         // Respaldo: iframe principal si no se encontraron botones de servidor
