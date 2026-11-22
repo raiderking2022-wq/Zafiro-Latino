@@ -452,8 +452,10 @@ function getStreams(tmdbId, mediaType, season, episode) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { getStreams: getStreams };
+  // Uso interno del addon en Vercel (y de las pruebas); Nuvio solo usa getStreams.
   module.exports._internal = {
-    parseCards: parseCards, serversFromPage: serversFromPage, findTarget: findTarget,
-    firstForm: firstForm, voeDecode: voeDecode, unpack: unpack, b64decode: b64decode
+    get: get, parseCards: parseCards, serversFromPage: serversFromPage, findEpisode: findEpisode,
+    resolveServer: resolveServer, findTarget: findTarget, firstForm: firstForm,
+    voeDecode: voeDecode, unpack: unpack, b64decode: b64decode, decode: decode, HOST_RE: HOST_RE
   };
 }
