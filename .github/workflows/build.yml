@@ -117,6 +117,9 @@ jobs:
         # jsDelivr, que guarda los archivos de una rama hasta 12 h. Se purgan todas las listas.
         continue-on-error: true
         run: |
+          # raw.githubusercontent.com tarda hasta 5 min en servir lo nuevo; si se purga antes,
+          # jsDelivr vuelve a guardar la versión anterior durante horas.
+          sleep 360
           files="zafiro.json repo.json plugins.json Zafiro.cs3 $(cd publication && ls plugins-*.json)"
           for f in $files; do
             for ref in builds refs/heads/builds; do
