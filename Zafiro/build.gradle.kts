@@ -1,5 +1,5 @@
 // Sube este número cada vez que publiques cambios para que CloudStream ofrezca la actualización
-version = 11
+version = 12
 
 cloudstream {
     language = "es"

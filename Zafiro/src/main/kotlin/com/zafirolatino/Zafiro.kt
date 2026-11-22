@@ -269,13 +269,14 @@ class Zafiro : MainAPI() {
      *   rd.php          -> redirige al servidor real (p. ej. voe.sx/e/ID)
      * Se reproduce ese recorrido enviando los formularios igual que el navegador.
      */
-    private suspend fun gotoCandidates(playerUrl: String, pageUrl: String): List<String> {
+    private suspend fun gotoCandidates(playerUrl: String, pageUrl: String, log: MutableList<String>): List<String> {
         val gotoUrl = playerUrl.replace("/player.php", "/goto.php")
         val code = Regex("[?&]h=([^&]+)").find(playerUrl)?.groupValues?.get(1)
         val out = mutableListOf<String>()
         try {
             var url = gotoUrl
             val first = app.get(gotoUrl, timeout = 15L)
+            log += "goto ${first.code} form=${first.text.contains("<form")} ${snippet(first.text)}"
             if (!first.url.contains("cinehdplus")) return listOf(first.url)
             var html: String = first.text
 
@@ -303,6 +304,7 @@ class Zafiro : MainAPI() {
                 }
 
                 val loc = res.headers["location"]
+                log += "${action.substringAfterLast('/')} ${res.code} loc=${loc ?: "-"} ${snippet(res.text)}"
                 if (!loc.isNullOrBlank()) {
                     val next = absUrl(action, loc)
                     if (!next.contains("cinehdplus")) {
@@ -317,19 +319,32 @@ class Zafiro : MainAPI() {
                 html = res.text
             }
         } catch (e: Exception) {
+            log += "ERROR ${e.javaClass.simpleName}: ${e.message?.take(80)}"
         }
         return out.distinct()
     }
 
-    /** Abre player.php en un WebView oculto y captura la petición al servidor de video. */
-    private suspend fun webViewCandidate(url: String, referer: String): String? = runCatching {
+    /** Texto corto de una respuesta, para el diagnóstico. */
+    private fun snippet(html: String): String {
+        val firstUrl = Regex("""https?://[^\s'"<>]+""").findAll(html).map { it.value }
+            .firstOrNull { u -> ignoredHosts.none { u.contains(it) } && !u.contains("w3.org") }
+        val text = runCatching { org.jsoup.Jsoup.parse(html).text() }.getOrDefault("").take(60)
+        return "len=${html.length} txt='$text' url=${firstUrl ?: "-"}"
+    }
+
+    /** Abre goto.php en un WebView oculto y captura la petición al servidor de video. */
+    private suspend fun webViewCandidate(url: String, referer: String, log: MutableList<String>): String? = try {
         val res = app.get(
             url.replace("/player.php", "/goto.php"),
             referer = url,
-            interceptor = WebViewResolver(embedRegex, timeout = 35_000L)
+            interceptor = WebViewResolver(embedRegex, timeout = 25_000L)
         )
+        log += "webview -> ${res.url}"
         res.url.takeIf { !it.contains("cinehdplus") }
-    }.getOrNull()
+    } catch (e: Exception) {
+        log += "webview ERROR ${e.javaClass.simpleName}: ${e.message?.take(60)}"
+        null
+    }
 
     /** Igual que [extract] pero probando también el dominio oficial del servidor. */
     private suspend fun tryExtract(
@@ -365,19 +380,25 @@ class Zafiro : MainAPI() {
         pageUrl: String,
         lang: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit,
+        log: MutableList<String> = mutableListOf()
     ): Boolean {
         if (!playerUrl.contains("cinehdplus")) {
             return tryExtract(playerUrl, domain, pageUrl, lang, subtitleCallback, callback)
         }
         // 1) goto.php (lo que abre el botón de play de player.php)
-        val candidates = gotoCandidates(playerUrl, pageUrl)
+        val candidates = gotoCandidates(playerUrl, pageUrl, log)
+        log += "candidatos=${candidates.size} ${candidates.take(3)}"
         for (c in candidates) {
-            if (tryExtract(c, domain, playerUrl, lang, subtitleCallback, callback)) return true
+            val ok = tryExtract(c, domain, playerUrl, lang, subtitleCallback, callback)
+            log += "extractor ${c.take(60)} -> ${if (ok) "OK" else "sin enlaces"}"
+            if (ok) return true
         }
         // 2) WebView sobre goto.php: captura la petición al reproductor real
-        val captured = webViewCandidate(playerUrl, pageUrl) ?: return false
-        return tryExtract(captured, domain, playerUrl, lang, subtitleCallback, callback)
+        val captured = webViewCandidate(playerUrl, pageUrl, log) ?: return false
+        val ok = tryExtract(captured, domain, playerUrl, lang, subtitleCallback, callback)
+        log += "extractor ${captured.take(60)} -> ${if (ok) "OK" else "sin enlaces"}"
+        return ok
     }
 
     /** Llama al extractor y añade el idioma al nombre del enlace. */
@@ -417,15 +438,37 @@ class Zafiro : MainAPI() {
         var found = false
 
         val servers = doc.select("button.player-tab[data-type=server][data-url]")
+        val logs = java.util.Collections.synchronizedList(mutableListOf<Pair<String, List<String>>>())
         // Todos los servidores a la vez: cada enlace aparece en cuanto se resuelve
         servers.toList().amap { btn ->
             val playerUrl = fixScheme(btn.attr("data-url"))
             val lang = btn.attr("data-lang").ifBlank { null }
             val domain = btn.attr("data-domain").ifBlank { null }
-            val ok = runCatching {
-                resolveServer(playerUrl, domain, data, lang, subtitleCallback, callback)
-            }.getOrDefault(false)
+            val log = mutableListOf<String>()
+            val ok = try {
+                resolveServer(playerUrl, domain, data, lang, subtitleCallback, callback, log)
+            } catch (e: Exception) {
+                log += "ERROR ${e.javaClass.simpleName}: ${e.message?.take(80)}"
+                false
+            }
             if (ok) found = true
+            logs += (domain ?: "?") to log.toList()
+        }
+
+        // DIAGNÓSTICO: si no hubo ningún enlace, se muestran los pasos como "enlaces"
+        // para poder ver en la app dónde falla (temporal).
+        if (!found) {
+            if (servers.isEmpty()) logs += "pagina" to listOf("sin botones player-tab en ${data.take(60)}")
+            var i = 0
+            logs.forEach { (domain, lines) ->
+                lines.forEach { line ->
+                    i++
+                    callback(
+                        newExtractorLink("Zafiro diag", "[$domain] $line".take(250), "https://diagnostico.invalid/$i.mp4")
+                    )
+                }
+            }
+            return i > 0
         }
 
         // Respaldo: iframe principal si no se encontraron botones de servidor
