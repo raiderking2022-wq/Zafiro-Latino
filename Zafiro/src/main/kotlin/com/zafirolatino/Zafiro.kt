@@ -219,9 +219,13 @@ class Zafiro : MainAPI() {
      * con anuncios.
      */
     private val embedRegex = Regex(
-        """^https?://(?:www\.)?(?:voe\.sx|[a-z0-9-]*streamtape\.[a-z]+|[a-z0-9-]*mixdropp?\.[a-z]+|""" +
-            """[a-z0-9-]*streamplay\.[a-z]+|filemoon\.[a-z]+|streamwish\.[a-z]+|dood\.[a-z]+|""" +
-            """uqload\.[a-z]+)/(?:e|v|f|d|embed|embed-)[/-]?[A-Za-z0-9]+""",
+        """^https?://(?:www\.)?(?:""" +
+            // VOE: dominio oficial (con o sin /e/) o espejo con id de 12 caracteres
+            """voe\.sx/(?:e/)?[A-Za-z0-9]{8,}|[^/?#]+/e/[a-z0-9]{12}(?:[/?#]|$)|""" +
+            // Otros servidores conocidos
+            """(?:[a-z0-9-]*streamtape\.[a-z]+|[a-z0-9-]*mixdropp?\.[a-z]+|[a-z0-9-]*streamplay\.[a-z]+|""" +
+            """filemoon\.[a-z]+|streamwish\.[a-z]+|dood\.[a-z]+|uqload\.[a-z]+)""" +
+            """/(?:e|v|f|d|embed|embed-)[/-]?[A-Za-z0-9]+)""",
         RegexOption.IGNORE_CASE
     )
 
@@ -340,10 +344,19 @@ class Zafiro : MainAPI() {
             return true
         }
         val canonical = domain?.lowercase()?.let { canonicalHosts[it] } ?: return false
-        val path = Regex("^https?://[^/]+(/.*)$").find(target)?.groupValues?.get(1) ?: return false
-        val alt = canonical + path
-        if (alt == target) return false
-        return runCatching { extract(alt, referer, lang, subtitleCallback, callback) }.getOrDefault(false)
+        val path = Regex("^https?://[^/]+(/[^?#]*)").find(target)?.groupValues?.get(1) ?: return false
+        val id = path.trimEnd('/').substringAfterLast('/')
+        // VOE: voe.sx/<id>, voe.sx/e/<id> o espejos (caseyseemavoid.com/e/<id>) -> voe.sx/e/<id>
+        val alts = buildList {
+            if (domain.equals("voe", true) && id.isNotBlank()) add("$canonical/e/$id")
+            add(canonical + path)
+        }.distinct().filter { it != target }
+        for (alt in alts) {
+            if (runCatching { extract(alt, referer, lang, subtitleCallback, callback) }.getOrDefault(false)) {
+                return true
+            }
+        }
+        return false
     }
 
     private suspend fun resolveServer(
