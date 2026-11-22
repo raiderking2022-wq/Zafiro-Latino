@@ -3,9 +3,11 @@ package com.zafirolatino
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
+import java.net.URLEncoder
 
 class Zafiro : MainAPI() {
     override var mainUrl = "https://cinehdplus.org"
@@ -18,6 +20,7 @@ class Zafiro : MainAPI() {
     override val mainPage = mainPageOf(
         "$mainUrl/peliculas/" to "Películas",
         "$mainUrl/series/" to "Series",
+        "$mainUrl/idioma/latino/" to "Latino",
         "$mainUrl/genero/accion/" to "Acción",
         "$mainUrl/genero/animacion/" to "Animación",
         "$mainUrl/genero/anime/" to "Anime",
@@ -29,6 +32,8 @@ class Zafiro : MainAPI() {
     )
 
     // ---------- Utilidades ----------
+
+    private fun fixScheme(url: String): String = if (url.startsWith("//")) "https:$url" else url
 
     /** Convierte el proxy de imágenes del sitio (wp-json/rm/v1/img) a la URL directa de TMDB. */
     private fun fixImage(raw: String?): String? {
@@ -57,7 +62,8 @@ class Zafiro : MainAPI() {
             .trim()
 
     private fun typeFromUrl(url: String): TvType =
-        if (url.contains("/series-tv-") || url.contains("/episodio-")) TvType.TvSeries else TvType.Movie
+        if (url.contains("/series-tv-") || url.contains("/temporadas-tv-") || url.contains("/episodio-"))
+            TvType.TvSeries else TvType.Movie
 
     private fun Element.toSearchResult(): SearchResponse? {
         val href = fixUrlNull(attr("href")) ?: return null
@@ -98,31 +104,35 @@ class Zafiro : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val doc = app.get("$mainUrl/?s=${query.encodeUri()}").document
+        val doc = app.get("$mainUrl/?s=${URLEncoder.encode(query, "UTF-8")}").document
         return doc.cards()
     }
-
-    private fun String.encodeUri(): String = java.net.URLEncoder.encode(this, "UTF-8")
 
     // ---------- Detalles ----------
 
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url).document
 
-        val title = doc.selectFirst("h1")?.ownText()?.trim()?.takeIf { it.isNotBlank() }
+        val heading = doc.selectFirst("h1") ?: doc.selectFirst("div.flex-1.min-w-0 > h2")
+        val title = heading?.ownText()?.trim()?.takeIf { it.isNotBlank() }
             ?: doc.selectFirst("meta[property=og:title]")?.attr("content")
-                ?.substringBefore(" – ")?.substringBefore(" - ")?.trim()
+                ?.removePrefix("Ver ")?.substringBefore(" Online")
+                ?.substringBefore(" – ")?.trim()
             ?: return null
-        val poster = fixImage(
-            doc.selectFirst("img[alt*=Póster], img[alt*=Poster], img.poster")?.attr("src")
-        ) ?: fixImage(doc.selectFirst("meta[property=og:image]")?.attr("content"))
-        val backdrop = fixImage(doc.selectFirst("meta[property=og:image]")?.attr("content"))
-        val plot = doc.selectFirst("meta[property=og:description], meta[name=description]")
-            ?.attr("content")?.trim()
-        val year = doc.selectFirst("h1 span")?.text()
+        // Póster vertical (contenedor aspect-2/3) y fondo (imagen tenue detrás del hero)
+        val poster = doc.selectFirst("div[class*=aspect-2/3] img")?.let { fixImage(it.attr("src")) }
+            ?: fixImage(doc.selectFirst("meta[property=og:image]")?.attr("content"))
+        val backdrop = doc.selectFirst("img[class*=opacity-20]")?.let { fixImage(it.attr("src")) }
+            ?.replace("/w500/", "/original/")
+        val plot = doc.selectFirst("div.prose-custom p, p[class*=line-clamp-3]")?.text()?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: doc.selectFirst("meta[property=og:description], meta[name=description]")
+                ?.attr("content")?.trim()
+        val year = heading?.selectFirst("span")?.text()
             ?.let { Regex("(19|20)\\d{2}").find(it)?.value?.toIntOrNull() }
-        val tags = doc.select("a[href*=/genero/]").map { it.text().trim() }
+        val tags = doc.select("div.flex-1.min-w-0 a[href*=/genero/]").map { it.text().trim() }
             .filter { it.isNotBlank() }.distinct()
+        val trailer = doc.selectFirst("button.player-tab[data-type=trailer]")?.attr("data-url")
         val recommendations = doc.cards().filter { it.url != url }
 
         return if (typeFromUrl(url) == TvType.TvSeries) {
@@ -134,6 +144,7 @@ class Zafiro : MainAPI() {
                 this.year = year
                 this.tags = tags
                 this.recommendations = recommendations
+                addTrailer(trailer)
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
@@ -143,6 +154,7 @@ class Zafiro : MainAPI() {
                 this.year = year
                 this.tags = tags
                 this.recommendations = recommendations
+                addTrailer(trailer)
             }
         }
     }
@@ -167,8 +179,8 @@ class Zafiro : MainAPI() {
     private suspend fun getEpisodes(doc: Document, poster: String?): List<Episode> {
         val episodes = parseEpisodes(doc, poster).toMutableList()
 
-        // Si las temporadas están en páginas aparte, se recorren también
-        doc.select("a[href*=temporada]").mapNotNull { fixUrlNull(it.attr("href")) }
+        // Las temporadas tienen páginas propias: /temporadas-tv-ID/slug-temporada-N/
+        doc.select("a[href*=/temporadas-tv-]").mapNotNull { fixUrlNull(it.attr("href")) }
             .distinct()
             .forEach { seasonUrl ->
                 runCatching { episodes += parseEpisodes(app.get(seasonUrl).document, poster) }
@@ -180,36 +192,64 @@ class Zafiro : MainAPI() {
 
     // ---------- Enlaces de video ----------
 
-    private val playerAttrs = listOf(
-        "data-src", "data-url", "data-link", "data-embed", "data-player", "data-video", "data-iframe"
+    private val ignoredHosts = listOf(
+        "cinehdplus", "googletagmanager", "google-analytics", "cloudflare", "jquery",
+        "w3.org", "recaptcha", "gstatic", "fonts.googleapis"
     )
 
-    private fun decodeMaybeBase64(value: String): String {
-        if (value.startsWith("http") || value.startsWith("//")) return value
-        return runCatching { String(base64DecodeArray(value)) }.getOrNull()
-            ?.takeIf { it.startsWith("http") || it.startsWith("//") } ?: value
+    /**
+     * Los servidores apuntan a //api.cinehdplus.org/ir/player.php?h=<cifrado>.
+     * Esa página redirige o incrusta el reproductor real (voe, streamtape, mixdrop...).
+     */
+    private suspend fun resolvePlayer(url: String, referer: String): String? {
+        val res = app.get(url, referer = referer)
+        if (!res.url.contains("cinehdplus")) return res.url
+
+        val doc = res.document
+        doc.selectFirst("iframe[src]")?.attr("src")?.takeIf { it.isNotBlank() }
+            ?.let { return fixScheme(it) }
+        doc.selectFirst("meta[http-equiv=refresh]")?.attr("content")
+            ?.substringAfter("url=", "")?.trim()?.takeIf { it.isNotBlank() }
+            ?.let { return fixScheme(it) }
+
+        val html = res.text
+        Regex("""(?:location(?:\.href)?\s*=|location\.replace\(|window\.open\(|src\s*[:=]|url\s*[:=])\s*['"]((?:https?:)?//[^'"]+)['"]""")
+            .find(html)?.groupValues?.get(1)
+            ?.takeIf { u -> ignoredHosts.none { u.contains(it) } }
+            ?.let { return fixScheme(it.replace("\\/", "/")) }
+
+        return Regex("""https?:\\?/\\?/[^\s'"<>]+""").findAll(html)
+            .map { it.value.replace("\\/", "/") }
+            .firstOrNull { u ->
+                ignoredHosts.none { u.contains(it) } && !u.endsWith(".js") && !u.endsWith(".css")
+            }
     }
 
-    private fun collectPlayerUrls(doc: Document): List<String> {
-        val urls = mutableListOf<String>()
-        doc.select("iframe").forEach { f ->
-            listOf("src", "data-src", "data-lazy-src").map { f.attr(it) }
-                .firstOrNull { it.isNotBlank() && it != "about:blank" }
-                ?.let { urls += it }
+    /** Llama al extractor y añade el idioma al nombre del enlace. */
+    private suspend fun extract(
+        url: String,
+        referer: String,
+        lang: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val links = mutableListOf<ExtractorLink>()
+        loadExtractor(url, referer, subtitleCallback) { links.add(it) }
+        links.forEach { link ->
+            if (lang.isNullOrBlank()) {
+                callback(link)
+            } else {
+                callback(
+                    newExtractorLink(link.source, "${link.name} [$lang]", link.url, link.type) {
+                        this.referer = link.referer
+                        this.quality = link.quality
+                        this.headers = link.headers
+                        this.extractorData = link.extractorData
+                    }
+                )
+            }
         }
-        doc.select(playerAttrs.joinToString(", ") { "[$it]" }).forEach { el ->
-            if (el.tagName() == "img") return@forEach
-            playerAttrs.map { el.attr(it) }.filter { it.isNotBlank() }
-                .forEach { urls += decodeMaybeBase64(it) }
-        }
-        // URLs de reproductores que aparezcan dentro de scripts
-        Regex("""https?:\\?/\\?/[^"'\s<>]+?/(?:e|embed|v|f|d|play|video)/[^"'\s<>]+""")
-            .findAll(doc.select("script").html())
-            .forEach { urls += it.value.replace("\\/", "/") }
-
-        return urls.map { if (it.startsWith("//")) "https:$it" else it }
-            .filter { it.startsWith("http") && !it.contains("googletagmanager") && !it.contains("recaptcha") }
-            .distinct()
+        return links.isNotEmpty()
     }
 
     override suspend fun loadLinks(
@@ -221,17 +261,29 @@ class Zafiro : MainAPI() {
         val doc = app.get(data).document
         var found = false
 
-        collectPlayerUrls(doc).forEach { playerUrl ->
-            if (playerUrl.contains("cinehdplus")) {
-                // Reproductor intermedio del propio sitio: se abre y se extraen sus servidores
+        val servers = doc.select("button.player-tab[data-type=server][data-url]")
+        servers.forEach { btn ->
+            val playerUrl = fixScheme(btn.attr("data-url"))
+            val lang = btn.attr("data-lang").ifBlank { null }
+            runCatching {
+                val target = if (playerUrl.contains("cinehdplus")) resolvePlayer(playerUrl, data)
+                else playerUrl
+                if (target != null && extract(target, playerUrl, lang, subtitleCallback, callback)) {
+                    found = true
+                }
+            }
+        }
+
+        // Respaldo: iframe principal si no se encontraron botones de servidor
+        if (servers.isEmpty()) {
+            doc.select("iframe#main-player-iframe, iframe[src*=player]").forEach { f ->
+                val src = fixScheme(f.attr("src"))
                 runCatching {
-                    val inner = app.get(playerUrl, referer = data).document
-                    collectPlayerUrls(inner).filter { !it.contains("cinehdplus") }.forEach {
-                        if (loadExtractor(it, playerUrl, subtitleCallback, callback)) found = true
+                    val target = if (src.contains("cinehdplus")) resolvePlayer(src, data) else src
+                    if (target != null && extract(target, src, null, subtitleCallback, callback)) {
+                        found = true
                     }
                 }
-            } else {
-                if (loadExtractor(playerUrl, data, subtitleCallback, callback)) found = true
             }
         }
         return found
