@@ -1,4 +1,4 @@
-/* Zafiro 1.0.1 - Proveedor nativo para Nuvio (películas y series de CineHDPlus).
+/* Zafiro 1.0.2 - Proveedor nativo para Nuvio (películas y series de CineHDPlus).
  * Misma lógica que el plugin Zafiro de CloudStream, pero con extractores propios
  * (Nuvio no trae extractores de VOE/Streamtape/Mixdrop).
  * Sin eval, sin claves incrustadas, sin dependencias de Node.
@@ -425,6 +425,16 @@ function extractorFor(server, target) {
 
 function prettyServer(d) { return d ? d.charAt(0).toUpperCase() + d.slice(1).replace(/pp$/, 'p') : 'Servidor'; }
 
+// "Español Latino" -> "Latino", "Español"/"Castellano" -> "Castellano", "Subtitulado" -> "Subtitulado".
+function shortLang(l) {
+  l = String(l || '');
+  if (/latino|latam|m[eé]xico/i.test(l)) return 'Latino';
+  if (/sub/i.test(l)) return 'Subtitulado';
+  if (/castellano|espa[ñn]a|espa[ñn]ol/i.test(l)) return 'Castellano';
+  if (/ingl|english/i.test(l)) return 'Inglés';
+  return l || 'Latino';
+}
+
 function resolveServer(server) {
   return resolveChain(server.url).then(function (target) {
     if (!target) { log(server.domain + ': sin enlace'); return null; }
@@ -432,8 +442,9 @@ function resolveServer(server) {
     if (!ex) { log(server.domain + ': sin extractor para ' + target); return null; }
     return ex(target).then(function (s) {
       if (!s || !s.url) return null;
+      // Nuvio muestra "name" en grande y la calidad debajo: el idioma va en el nombre.
       return {
-        name: NAME,
+        name: NAME + ' · ' + shortLang(server.lang) + ' · ' + prettyServer(server.domain),
         title: NAME + ' · ' + server.lang + ' · ' + prettyServer(server.domain),
         url: s.url,
         quality: /\.m3u8/.test(s.url) ? 'Auto' : 'HD',

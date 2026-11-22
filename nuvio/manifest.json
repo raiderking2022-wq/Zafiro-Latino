@@ -1,14 +1,14 @@
 {
   "name": "Zafiro",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "scrapers": [
     {
       "id": "zafiro",
       "name": "Zafiro",
       "description": "Películas y series de CineHDPlus en español (Latino, Castellano). Servidores VOE, Streamtape y Mixdrop.",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": "raiderking2022-wq",
-      "filename": "providers/zafiro.js?v=1.0.1",
+      "filename": "providers/zafiro.js?v=1.0.2",
       "supportedTypes": ["movie", "tv"],
       "contentLanguage": ["es"],
       "formats": ["m3u8", "mp4"],
