@@ -53,6 +53,19 @@ jobs:
           cp repo.json dist/
           test -s dist/plugins.json
           test -s dist/Zafiro.cs3
+          # Copia con la versión en el nombre: así CloudStream nunca mezcla un .cs3
+          # en caché con una lista de plugins nueva (error "Mismatched digest").
+          python3 - <<'PY'
+          import json, shutil
+          p = "dist/plugins.json"
+          plugins = json.load(open(p))
+          for pl in plugins:
+              name, ver = pl["internalName"], pl["version"]
+              shutil.copy(f"dist/{name}.cs3", f"dist/{name}-v{ver}.cs3")
+              pl["url"] = pl["url"].replace(f"/builds/{name}.cs3", f"/refs/heads/builds/{name}-v{ver}.cs3")
+          json.dump(plugins, open(p, "w"), indent=4, ensure_ascii=False)
+          PY
+          cat dist/plugins.json
 
       - uses: actions/upload-artifact@v4
         with:
