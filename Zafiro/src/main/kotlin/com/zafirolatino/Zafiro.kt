@@ -299,7 +299,7 @@ class Zafiro : MainAPI() {
     }
 
     /**
-     * Cadena real del sitio (vista con la versión de diagnóstico):
+     * Cadena real del sitio (observada en el sitio):
      *   goto.php (formulario) -> rd.php -> redir_ddh.php (formulario) -> fotise.com ("Stream API")
      *   -> artículos de un acortador "safelink" -> servidor de video (voe.sx/e/ID ...).
      * Se recorren formularios, redirecciones y saltos por JavaScript como un navegador,
@@ -384,7 +384,7 @@ class Zafiro : MainAPI() {
         return emptyList()
     }
 
-    /** Texto corto de una respuesta, para el diagnóstico. */
+    /** Texto corto de una respuesta, para el registro interno de pasos. */
     private fun snippet(html: String): String {
         val firstUrl = Regex("""https?://[^\s'"<>]+""").findAll(html).map { it.value }
             .firstOrNull { u -> ignoredHosts.none { u.contains(it) } && !u.contains("w3.org") }
@@ -498,7 +498,6 @@ class Zafiro : MainAPI() {
         var found = false
 
         val servers = doc.select("button.player-tab[data-type=server][data-url]")
-        val logs = java.util.Collections.synchronizedList(mutableListOf<Pair<String, List<String>>>())
         // Todos los servidores a la vez: cada enlace aparece en cuanto se resuelve
         servers.toList().amap { btn ->
             val playerUrl = fixScheme(btn.attr("data-url"))
@@ -512,24 +511,8 @@ class Zafiro : MainAPI() {
                 false
             }
             if (ok) found = true
-            logs += (domain ?: "?") to log.toList()
         }
 
-        // DIAGNÓSTICO: si no hubo ningún enlace, se muestran los pasos como "enlaces"
-        // para poder ver en la app dónde falla (temporal).
-        if (!found) {
-            if (servers.isEmpty()) logs += "pagina" to listOf("sin botones player-tab en ${data.take(60)}")
-            var i = 0
-            logs.forEach { (domain, lines) ->
-                lines.forEach { line ->
-                    i++
-                    callback(
-                        newExtractorLink("Zafiro diag", "[$domain] $line".take(250), "https://diagnostico.invalid/$i.mp4")
-                    )
-                }
-            }
-            return i > 0
-        }
 
         // Respaldo: iframe principal si no se encontraron botones de servidor
         if (servers.isEmpty()) {
